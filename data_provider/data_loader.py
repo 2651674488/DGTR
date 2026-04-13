@@ -80,8 +80,8 @@ class Dataset_ETT_hour(Dataset):
         self.data_y = data[border1:border2]
         self.data_stamp = data_stamp
 
-        # add cycle
-        self.cycle_index = (np.arange(len(data)) % self.cycle)[border1:border2]
+        # absolute time index for learnable-cycle models
+        self.cycle_index = np.arange(len(data))[border1:border2]
 
     def __getitem__(self, index):
         s_begin = index
@@ -177,8 +177,8 @@ class Dataset_ETT_minute(Dataset):
         self.data_y = data[border1:border2]
         self.data_stamp = data_stamp
 
-        # add cycle
-        self.cycle_index = (np.arange(len(data)) % self.cycle)[border1:border2]
+        # absolute time index for learnable-cycle models
+        self.cycle_index = np.arange(len(data))[border1:border2]
 
     def __getitem__(self, index):
         s_begin = index
@@ -285,8 +285,8 @@ class Dataset_Custom(Dataset):
         self.data_y = data[border1:border2]
         self.data_stamp = data_stamp
 
-        # add cycle
-        self.cycle_index = (np.arange(len(data)) % self.cycle)[border1:border2]
+        # absolute time index for learnable-cycle models
+        self.cycle_index = np.arange(len(data))[border1:border2]
 
     def __getitem__(self, index):
         s_begin = index
@@ -473,8 +473,8 @@ class Dataset_Solar(Dataset):
         self.data_x = data[border1:border2]
         self.data_y = data[border1:border2]
 
-        # add cycle
-        self.cycle_index = (np.arange(len(data)) % self.cycle)[border1:border2]
+        # absolute time index for learnable-cycle models
+        self.cycle_index = np.arange(len(data))[border1:border2]
 
     def __getitem__(self, index):
         s_begin = index
@@ -545,8 +545,8 @@ class Dataset_PEMS(Dataset):
         self.data_x = data[border1:border2]
         self.data_y = data[border1:border2]
 
-        # add cycle
-        self.cycle_index = (np.arange(len(data)) % self.cycle)[border1:border2]
+        # absolute time index for learnable-cycle models
+        self.cycle_index = np.arange(len(data))[border1:border2]
 
     def __getitem__(self, index):
         s_begin = index
