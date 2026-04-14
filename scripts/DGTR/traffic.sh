@@ -2,7 +2,7 @@ model_name=DGTR
 
 root_path_name=./dataset/
 data_path_name=traffic.csv
-model_id_name=traffic
+model_id_name=trafficDynamicOnly
 data_name=custom
 
 
@@ -15,7 +15,7 @@ do
       --is_training 1 \
       --root_path $root_path_name \
       --data_path $data_path_name \
-      --model_id $model_id_name'_'$seq_len'_'$pred_len \
+      --model_id $model_id_name'_'$seq_len'_'$pred_len'_dynamic_only' \
       --model $model_name \
       --data $data_name \
       --features M \
@@ -23,6 +23,7 @@ do
       --pred_len $pred_len \
       --enc_in 862 \
       --cycle 168 \
+      --dgtr_use_multiscale 1 \
       --individual 1 \
       --train_epochs 30 \
       --patience 5 \

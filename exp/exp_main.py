@@ -81,7 +81,7 @@ class Exp_Main(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if 'DGTR' in self.args.model:
-                            outputs = self.model(batch_x, batch_cycle)
+                            outputs = self.model(batch_x)
                         elif 'CycleNet' in self.args.model:
                             outputs = self.model(batch_x, batch_cycle)
                         elif 'GTR' in self.args.model:
@@ -96,7 +96,7 @@ class Exp_Main(Exp_Basic):
                                 outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
                     if 'DGTR' in self.args.model:
-                        outputs = self.model(batch_x, batch_cycle)
+                        outputs = self.model(batch_x)
                     elif 'CycleNet' in self.args.model:
                         outputs = self.model(batch_x, batch_cycle)
                     elif 'GTR' in self.args.model:
@@ -173,7 +173,7 @@ class Exp_Main(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if 'DGTR' in self.args.model:
-                            outputs = self.model(batch_x, batch_cycle)
+                            outputs = self.model(batch_x)
                         elif 'CycleNet' in self.args.model:
                             outputs = self.model(batch_x, batch_cycle)
                         elif 'GTR' in self.args.model:
@@ -194,7 +194,7 @@ class Exp_Main(Exp_Basic):
                         train_loss.append(loss.item())
                 else:
                     if 'DGTR' in self.args.model:
-                        outputs = self.model(batch_x, batch_cycle)
+                        outputs = self.model(batch_x)
                     elif 'CycleNet' in self.args.model:
                         outputs = self.model(batch_x, batch_cycle)
                     elif 'GTR' in self.args.model:
@@ -292,7 +292,7 @@ class Exp_Main(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if 'DGTR' in self.args.model:
-                            outputs = self.model(batch_x, batch_cycle)
+                            outputs = self.model(batch_x)
                         elif 'CycleNet' in self.args.model:
                             outputs = self.model(batch_x, batch_cycle)
                         elif 'GTR' in self.args.model:
@@ -307,7 +307,7 @@ class Exp_Main(Exp_Basic):
                                 outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
                     if 'DGTR' in self.args.model:
-                        outputs = self.model(batch_x, batch_cycle)
+                        outputs = self.model(batch_x)
                     elif 'CycleNet' in self.args.model:
                         outputs = self.model(batch_x, batch_cycle)
                     elif 'GTR' in self.args.model:
@@ -410,7 +410,7 @@ class Exp_Main(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if 'DGTR' in self.args.model:
-                            outputs = self.model(batch_x, batch_cycle)
+                            outputs = self.model(batch_x)
                         elif 'CycleNet' in self.args.model:
                             outputs = self.model(batch_x, batch_cycle)
                         elif 'GTR' in self.args.model:
@@ -425,7 +425,7 @@ class Exp_Main(Exp_Basic):
                                 outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
                     if 'DGTR' in self.args.model:
-                        outputs = self.model(batch_x, batch_cycle)
+                        outputs = self.model(batch_x)
                     elif 'CycleNet' in self.args.model:
                         outputs = self.model(batch_x, batch_cycle)
                     elif 'GTR' in self.args.model:
