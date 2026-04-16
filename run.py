@@ -44,6 +44,10 @@ def main():
                         help='DGTR: softmax temperature for query/branch gating')
     parser.add_argument('--dgtr_use_multiscale', type=int, default=1,
                         help='DGTR: 1 enables adaptive multi-period query, 0 keeps only base period')
+    parser.add_argument('--dgtr_use_cross_var_mixer', type=int, default=1,
+                        help='DGTR: 1 enables cross-variable query mixer, 0 disables mixer')
+    parser.add_argument('--dgtr_use_agg', type=int, default=1,
+                        help='DGTR: 1 enables channel aggregation in DGTR block, 0 disables aggregation')
     parser.add_argument('--learnable_tau_min', type=float, default=2.0,
                         help='DGTR: minimum learnable cycle length')
     parser.add_argument('--learnable_tau_max', type=float, default=512.0,

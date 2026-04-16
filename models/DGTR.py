@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+# \subsection{动态周期感知检索（Dynamic Period-Aware Retrieval）}
+# Code anchor: DynamicPeriodEstimator class and Model.forward period estimation block.
 class DynamicPeriodEstimator(nn.Module):
     """Estimate sample-wise multi-period candidates and weights."""
 
@@ -72,6 +74,8 @@ class DynamicPeriodEstimator(nn.Module):
 
 
 class DGTR(nn.Module):
+    # \subsection{自适应多分支时序融合（Adaptive Multi-Branch Temporal Fusion）}
+    # Code anchor: multi-branch Conv2d retrieval with branch_weight gating.
     def __init__(self, d_series, c, CI=False, period_len=24, branch_kernels=None, agg=True):
         super(DGTR, self).__init__()
         self.agg = agg
@@ -129,11 +133,11 @@ class DGTR(nn.Module):
         # Step 1: Mapping（q 在时间上逐通道 LayerNorm 再进 linear）
         global_query = self.linear(self.q_norm(q))
 
-        # Step 2: GTA mode, aggregate across channels, design for capturing inter-varaible dependencies.
+        # Step 2: GTA mode, aggregate along temporal length.
         if self.agg:
-            weight = F.softmax(global_query, dim=1)
-            global_query = torch.sum(global_query * weight, dim=1, keepdim=True)
-            global_query = global_query.repeat(1, C, 1)  # (B, C, S)
+            weight = F.softmax(global_query, dim=-1)  # normalize over length S
+            global_query = torch.sum(global_query * weight, dim=-1, keepdim=True)  # (B, C, 1)
+            global_query = global_query.repeat(1, 1, S)  # (B, C, S)
 
         # Step 3: Fuse
         out = torch.stack([x, global_query], dim=2)  # (B, C, 2, S)
@@ -205,17 +209,12 @@ class Model(nn.Module):
             gate_temp=self.gate_temp,
         )
 
-        self.cross_var_mixer = nn.Sequential(
-            nn.Conv1d(self.enc_in, self.enc_in, kernel_size=1, bias=False),
-            nn.GELU(),
-            nn.Conv1d(self.enc_in, self.enc_in, kernel_size=1, bias=False),
-        )
         self.DGTR = DGTR(
             d_series=self.seq_len,
             c=self.enc_in,
             CI=self.individual,
             branch_kernels=branch_kernels,
-            agg=True,
+            agg=False,
         )
 
         gate_hidden = max(16, self.enc_in)
@@ -249,6 +248,9 @@ class Model(nn.Module):
         return [int(kernel) for kernel in kernels]
 
     def _build_multiscale_query(self, tau_all, tau_weight, seq_len, device):
+        # \subsection{多尺度相位查询构建（Multi-Scale Phase Query Construction）}
+        # Code anchor: build sinusoidal phase features for all candidate periods,
+        # then project and merge by tau_weight to form query_input.
         B = tau_all.shape[0]
         time_index = torch.arange(seq_len, device=device, dtype=torch.float32).view(1, -1).expand(B, -1)
         theta = (2.0 * torch.pi * time_index.unsqueeze(1)) / tau_all.unsqueeze(-1)  # (B, K+1, S)
@@ -269,20 +271,25 @@ class Model(nn.Module):
         # (B, S, C) -> (B, C, S)
         x_input = x.permute(0, 2, 1)
 
-        # DGTR part (index-free dynamic cycle + similarity retrieval)
+        # \subsection{动态周期感知检索（Dynamic Period-Aware Retrieval）}
+        # Code anchor: estimate candidate periods and sample-wise period weights.
         tau_all, tau_weight, spec_stats = self.period_estimator(x_input)
         if not self.use_multiscale:
             tau_weight = tau_weight.new_zeros(tau_weight.shape)
             tau_weight[:, 0] = 1.0
 
+        # \subsection{多尺度相位查询构建（Multi-Scale Phase Query Construction）}
+        # Code anchor: convert multi-period phase features into query_input.
         query_input = self._build_multiscale_query(
             tau_all=tau_all,
             tau_weight=tau_weight,
             seq_len=x_input.shape[-1],
             device=x_input.device,
         )
-        query_input = query_input + self.cross_var_mixer(query_input)
 
+        # \subsection{自适应多分支时序融合（Adaptive Multi-Branch Temporal Fusion）}
+        # Code anchor: compute branch-wise gates from spectral stats, then
+        # fuse multi-branch temporal retrieval outputs in DGTR.
         branch_weight = F.softmax(self.branch_gate(spec_stats) / self.gate_temp, dim=-1)
         global_information = self.DGTR(x_input, query_input, branch_weight=branch_weight)
 
