@@ -25,7 +25,7 @@ do
       --dropout 0.5 \
       --itr 1 --batch_size 256 --learning_rate 0.001 --random_seed $random_seed
 
-    # A1: DGTR full (dynamic + multi-branch + cross-var)
+    # A1: DGTR full (dynamic + multi-branch)
     python -u run.py \
       --is_training 1 \
       --root_path $root_path_name \
@@ -39,12 +39,8 @@ do
       --enc_in 7 \
       --cycle 96 \
       --dgtr_spectrum_k 4 \
-      --dgtr_freq_smooth 0.2 \
       --dgtr_branch_kernels 3,7,15,31 \
-      --dgtr_gate_temp 1.0 \
       --dgtr_use_multiscale 1 \
-      --dgtr_use_cross_var_mixer 1 \
-      --dgtr_use_agg 1 \
       --train_epochs 3 \
       --patience 5 \
       --dropout 0.5 \
@@ -64,12 +60,8 @@ do
       --enc_in 7 \
       --cycle 96 \
       --dgtr_spectrum_k 4 \
-      --dgtr_freq_smooth 0.2 \
       --dgtr_branch_kernels 3,7,15,31 \
-      --dgtr_gate_temp 1.0 \
       --dgtr_use_multiscale 0 \
-      --dgtr_use_cross_var_mixer 1 \
-      --dgtr_use_agg 1 \
       --train_epochs 3 \
       --patience 5 \
       --dropout 0.5 \
@@ -89,18 +81,14 @@ do
       --enc_in 7 \
       --cycle 96 \
       --dgtr_spectrum_k 4 \
-      --dgtr_freq_smooth 0.2 \
       --dgtr_branch_kernels 31 \
-      --dgtr_gate_temp 1.0 \
       --dgtr_use_multiscale 1 \
-      --dgtr_use_cross_var_mixer 1 \
-      --dgtr_use_agg 1 \
       --train_epochs 3 \
       --patience 5 \
       --dropout 0.5 \
       --itr 1 --batch_size 256 --learning_rate 0.001 --random_seed $random_seed
 
-    # A4: DGTR without cross-variable enhancement (no mixer + no agg)
+    # A4: DGTR control setting
     python -u run.py \
       --is_training 1 \
       --root_path $root_path_name \
@@ -114,12 +102,8 @@ do
       --enc_in 7 \
       --cycle 96 \
       --dgtr_spectrum_k 4 \
-      --dgtr_freq_smooth 0.2 \
       --dgtr_branch_kernels 3,7,15,31 \
-      --dgtr_gate_temp 1.0 \
       --dgtr_use_multiscale 1 \
-      --dgtr_use_cross_var_mixer 0 \
-      --dgtr_use_agg 0 \
       --train_epochs 3 \
       --patience 5 \
       --dropout 0.5 \

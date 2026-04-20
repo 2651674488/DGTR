@@ -2,7 +2,7 @@ model_name=DGTR
 
 root_path_name=./dataset/
 data_path_name=ETTh1.csv
-model_id_name=ETTh1DynamicOnly
+model_id_name=ETTh1
 data_name=ETTh1
 
 seq_len=96
@@ -14,7 +14,7 @@ do
       --is_training 1 \
       --root_path $root_path_name \
       --data_path $data_path_name \
-      --model_id $model_id_name'_'$seq_len'_'$pred_len'_dynamic_only' \
+      --model_id $model_id_name'_'$seq_len'_'$pred_len \
       --model $model_name \
       --data $data_name \
       --features M \
@@ -22,10 +22,10 @@ do
       --pred_len $pred_len \
       --enc_in 7 \
       --cycle 24 \
-      --dgtr_use_multiscale 1 \
       --train_epochs 30 \
       --patience 5 \
       --dropout 0 \
+      --individual 0 \
       --itr 1 --batch_size 256 --learning_rate 0.001 --random_seed $random_seed
 done
 done

@@ -8,21 +8,19 @@ import torch.nn.functional as F
 class DynamicPeriodEstimator(nn.Module):
     """Estimate sample-wise multi-period candidates and weights."""
 
-    def __init__(self, spectrum_k, tau_min, tau_max, tau_init, freq_smooth, gate_temp, stats_dim=3):
+    def __init__(self, spectrum_k, tau_min, tau_max, tau_init, stats_dim=3):
         super().__init__()
-        self.spectrum_k = max(1, int(spectrum_k))
-        self.tau_min = float(tau_min)
-        self.tau_max = float(tau_max)
-        self.freq_smooth = min(max(float(freq_smooth), 0.0), 1.0)
-        self.gate_temp = max(float(gate_temp), 1e-3)
+        self.spectrum_k = max(1, int(spectrum_k)) # 周期数
+        self.tau_min = float(tau_min) # 最短周期
+        self.tau_max = float(tau_max) # 最长周期
 
-        tau_init = max(min(float(tau_init), self.tau_max - 1e-4), self.tau_min + 1e-4)
-        tau_ratio = (tau_init - self.tau_min) / (self.tau_max - self.tau_min)
-        tau_ratio = min(max(tau_ratio, 1e-4), 1.0 - 1e-4)
+        tau_init = max(min(float(tau_init), self.tau_max - 1e-4), self.tau_min + 1e-4) #初始周期长度
+        tau_ratio = (tau_init - self.tau_min) / (self.tau_max - self.tau_min) # 归一化
+        tau_ratio = min(max(tau_ratio, 1e-4), 1.0 - 1e-4) # 限制在0-1之间
         self.raw_tau = nn.Parameter(torch.logit(torch.tensor(tau_ratio)))
-        self.base_harmonic_logit = nn.Parameter(torch.tensor(0.0))
+        self.base_harmonic_logit = nn.Parameter(torch.tensor(0.0)) # base周期权重
 
-        gate_hidden = max(16, stats_dim * 8)
+        gate_hidden = max(16, stats_dim * 8) # 门控MLP的隐藏宽度
         self.query_gate = nn.Sequential(
             nn.Linear(stats_dim, gate_hidden),
             nn.GELU(),
@@ -30,11 +28,12 @@ class DynamicPeriodEstimator(nn.Module):
         )
 
     def forward(self, x_input):
+        # 从输入序列中提取候选周期，并给每个周期分配权重。
         # x_input: (B, C, S)
         B, _, S = x_input.shape
-        centered = x_input - x_input.mean(dim=-1, keepdim=True)
-        spectrum = torch.fft.rfft(centered, dim=-1)
-        amplitude = spectrum.abs().mean(dim=1)  # (B, F)
+        centered = x_input - x_input.mean(dim=-1, keepdim=True) # 中心化
+        spectrum = torch.fft.rfft(centered, dim=-1) # 傅里叶变换
+        amplitude = spectrum.abs().mean(dim=1)  # (B, F)在通道维求平均，把多通道频谱合成为一个代表性频谱，用于后续统一的周期候选提取。
         amplitude[:, 0] = 0.0
 
         valid_bins = max(0, amplitude.shape[-1] - 1)
@@ -42,8 +41,6 @@ class DynamicPeriodEstimator(nn.Module):
         if topk > 0:
             topk_vals, topk_idx = torch.topk(amplitude[:, 1:], k=topk, dim=-1)
             topk_idx = topk_idx + 1
-            if self.freq_smooth > 0:
-                topk_vals = (1.0 - self.freq_smooth) * topk_vals + self.freq_smooth * topk_vals.mean(dim=0, keepdim=True)
             periods = (float(S) / topk_idx.float()).clamp(self.tau_min, self.tau_max)
         else:
             topk_vals = amplitude.new_zeros(B, 0)
@@ -69,14 +66,15 @@ class DynamicPeriodEstimator(nn.Module):
         base_score = self.base_harmonic_logit.expand(B, 1)
         prior_scores = torch.cat([base_score, topk_vals], dim=1)
         tau_logits = self.query_gate(spec_stats)[:, :tau_all.shape[1]] + prior_scores
-        tau_weights = F.softmax(tau_logits / self.gate_temp, dim=-1)
+        tau_weights = F.softmax(tau_logits, dim=-1)
+        # tau_all（候选周期）、tau_weights（对应权重）、spec_stats（频谱统计）。用于后续的查询构建。
         return tau_all, tau_weights, spec_stats
 
 
 class DGTR(nn.Module):
     # \subsection{自适应多分支时序融合（Adaptive Multi-Branch Temporal Fusion）}
     # Code anchor: multi-branch Conv2d retrieval with branch_weight gating.
-    def __init__(self, d_series, c, CI=False, period_len=24, branch_kernels=None, agg=True):
+    def __init__(self, d_series, c, CI=True, period_len=24, branch_kernels=None, agg=True):
         super(DGTR, self).__init__()
         self.agg = agg
         self.period_len = period_len
@@ -180,12 +178,9 @@ class Model(nn.Module):
 
         self.d_model = configs.d_model
         self.dropout = configs.dropout
-        self.use_revin = configs.use_revin
         self.individual = configs.individual
 
         self.spectrum_k = max(1, int(getattr(configs, 'dgtr_spectrum_k', 4)))
-        self.freq_smooth = min(max(float(getattr(configs, 'dgtr_freq_smooth', 0.2)), 0.0), 1.0)
-        self.gate_temp = max(float(getattr(configs, 'dgtr_gate_temp', 1.0)), 1e-3)
         self.use_multiscale = bool(int(getattr(configs, 'dgtr_use_multiscale', 1)))
         branch_kernels = self._parse_branch_kernels(getattr(configs, 'dgtr_branch_kernels', '3,7,15,31'))
 
@@ -205,8 +200,6 @@ class Model(nn.Module):
             tau_min=self.tau_min,
             tau_max=self.tau_max,
             tau_init=tau_init,
-            freq_smooth=self.freq_smooth,
-            gate_temp=self.gate_temp,
         )
 
         self.DGTR = DGTR(
@@ -263,10 +256,9 @@ class Model(nn.Module):
 
     def forward(self, x, cycle_index=None):
         # RevIN normalize
-        if self.use_revin:
-            seq_mean = torch.mean(x, dim=1, keepdim=True)
-            seq_var = torch.var(x, dim=1, keepdim=True) + 1e-5
-            x = (x - seq_mean) / torch.sqrt(seq_var)
+        seq_mean = torch.mean(x, dim=1, keepdim=True)
+        seq_var = torch.var(x, dim=1, keepdim=True) + 1e-5
+        x = (x - seq_mean) / torch.sqrt(seq_var)
 
         # (B, S, C) -> (B, C, S)
         x_input = x.permute(0, 2, 1)
@@ -290,7 +282,7 @@ class Model(nn.Module):
         # \subsection{自适应多分支时序融合（Adaptive Multi-Branch Temporal Fusion）}
         # Code anchor: compute branch-wise gates from spectral stats, then
         # fuse multi-branch temporal retrieval outputs in DGTR.
-        branch_weight = F.softmax(self.branch_gate(spec_stats) / self.gate_temp, dim=-1)
+        branch_weight = F.softmax(self.branch_gate(spec_stats), dim=-1)
         global_information = self.DGTR(x_input, query_input, branch_weight=branch_weight)
 
         # Projection + MLP
@@ -299,7 +291,6 @@ class Model(nn.Module):
         output = self.output_proj(hidden + input_proj).permute(0, 2, 1)
 
         # RevIN de-normalize
-        if self.use_revin:
-            output = output * torch.sqrt(seq_var) + seq_mean
+        output = output * torch.sqrt(seq_var) + seq_mean
         return output
 
