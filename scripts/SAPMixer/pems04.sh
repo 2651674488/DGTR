@@ -1,14 +1,15 @@
-model_name=DGTR
+model_name=SAPMixer
 
 root_path_name=./dataset/
-data_path_name=ETTh1.csv
-model_id_name=ETTh1
-data_name=ETTh1
+data_path_name=PEMS04.npz
+model_id_name=PEMS04
+data_name=PEMS
+
 
 seq_len=96
-for pred_len in 96 192 336 720
+for pred_len in 12 24 48 96
 do
-for random_seed in 2024 2025 2026 2027 2028 2029
+for random_seed in 2024
 do
     python -u run.py \
       --is_training 1 \
@@ -20,14 +21,11 @@ do
       --features M \
       --seq_len $seq_len \
       --pred_len $pred_len \
-      --enc_in 7 \
-      --cycle 24 \
+      --enc_in 307 \
+      --cycle 288 \
       --train_epochs 30 \
       --patience 5 \
-      --dropout 0 \
-      --individual 0 \
-      --itr 1 --batch_size 256 --learning_rate 0.001 --random_seed $random_seed
+      --use_revin 0 \
+      --itr 1 --batch_size 32 --learning_rate 0.003 --random_seed $random_seed
 done
 done
-
-

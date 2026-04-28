@@ -1,7 +1,7 @@
 from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
 from models import Informer, Autoformer, Transformer, DLinear, Linear, NLinear, PatchTST, SegRNN, CycleNet, \
-    iTransformer, TimeXer, GTR, GTRDLinear, GTRPatchTST, GTRiTransformer, DGTR
+    iTransformer, TimeXer, GTR, GTRDLinear, GTRPatchTST, GTRiTransformer, SAPMixer
 from utils.tools import EarlyStopping, adjust_learning_rate, visual, test_params_flop
 from utils.metrics import metric
 
@@ -42,7 +42,7 @@ class Exp_Main(Exp_Basic):
             'GTRDLinear': GTRDLinear,
             'GTRPatchTST': GTRPatchTST,
             'GTRiTransformer': GTRiTransformer,
-            'DGTR': DGTR
+            'SAPMixer': SAPMixer
         }
         model = model_dict[self.args.model].Model(self.args).float()
 
@@ -80,7 +80,7 @@ class Exp_Main(Exp_Basic):
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        if 'DGTR' in self.args.model:
+                        if 'SAPMixer' in self.args.model:
                             outputs = self.model(batch_x)
                         elif 'CycleNet' in self.args.model:
                             outputs = self.model(batch_x, batch_cycle)
@@ -95,7 +95,7 @@ class Exp_Main(Exp_Basic):
                             else:
                                 outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
-                    if 'DGTR' in self.args.model:
+                    if 'SAPMixer' in self.args.model:
                         outputs = self.model(batch_x)
                     elif 'CycleNet' in self.args.model:
                         outputs = self.model(batch_x, batch_cycle)
@@ -172,7 +172,7 @@ class Exp_Main(Exp_Basic):
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        if 'DGTR' in self.args.model:
+                        if 'SAPMixer' in self.args.model:
                             outputs = self.model(batch_x)
                         elif 'CycleNet' in self.args.model:
                             outputs = self.model(batch_x, batch_cycle)
@@ -193,7 +193,7 @@ class Exp_Main(Exp_Basic):
                         loss = criterion(outputs, batch_y)
                         train_loss.append(loss.item())
                 else:
-                    if 'DGTR' in self.args.model:
+                    if 'SAPMixer' in self.args.model:
                         outputs = self.model(batch_x)
                     elif 'CycleNet' in self.args.model:
                         outputs = self.model(batch_x, batch_cycle)
@@ -291,7 +291,7 @@ class Exp_Main(Exp_Basic):
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        if 'DGTR' in self.args.model:
+                        if 'SAPMixer' in self.args.model:
                             outputs = self.model(batch_x)
                         elif 'CycleNet' in self.args.model:
                             outputs = self.model(batch_x, batch_cycle)
@@ -306,7 +306,7 @@ class Exp_Main(Exp_Basic):
                             else:
                                 outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
-                    if 'DGTR' in self.args.model:
+                    if 'SAPMixer' in self.args.model:
                         outputs = self.model(batch_x)
                     elif 'CycleNet' in self.args.model:
                         outputs = self.model(batch_x, batch_cycle)
@@ -409,7 +409,7 @@ class Exp_Main(Exp_Basic):
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        if 'DGTR' in self.args.model:
+                        if 'SAPMixer' in self.args.model:
                             outputs = self.model(batch_x)
                         elif 'CycleNet' in self.args.model:
                             outputs = self.model(batch_x, batch_cycle)
@@ -424,7 +424,7 @@ class Exp_Main(Exp_Basic):
                             else:
                                 outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
-                    if 'DGTR' in self.args.model:
+                    if 'SAPMixer' in self.args.model:
                         outputs = self.model(batch_x)
                     elif 'CycleNet' in self.args.model:
                         outputs = self.model(batch_x, batch_cycle)

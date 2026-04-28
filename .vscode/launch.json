@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug DGTR ETTh1 96->96",
+      "name": "Debug SAPMixer ETTh1 96->96",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/run.py",
@@ -19,7 +19,7 @@
         "--model_id",
         "ETTh1_96_96",
         "--model",
-        "DGTR",
+        "SAPMixer",
         "--data",
         "ETTh1",
         "--features",

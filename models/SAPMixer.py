@@ -8,19 +8,30 @@ import torch.nn.functional as F
 class DynamicPeriodEstimator(nn.Module):
     """Estimate sample-wise multi-period candidates and weights."""
 
-    def __init__(self, spectrum_k, tau_min, tau_max, tau_init, stats_dim=3):
+    def __init__(
+        self,
+        spectrum_k,
+        tau_min,
+        tau_max,
+        tau_init,
+        stats_dim=3,
+        spectrum_mode="energy_cum",
+        spectrum_cum_ratio=0.9,
+    ):
         super().__init__()
-        self.spectrum_k = max(1, int(spectrum_k)) # 周期数
-        self.tau_min = float(tau_min) # 最短周期
-        self.tau_max = float(tau_max) # 最长周期
+        self.spectrum_k = max(1, int(spectrum_k))  # 周期数
+        self.spectrum_mode = str(spectrum_mode) if spectrum_mode is not None else "energy_cum"
+        self.spectrum_cum_ratio = min(max(float(spectrum_cum_ratio), 0.0), 1.0)
+        self.tau_min = float(tau_min)  # 最短周期
+        self.tau_max = float(tau_max)  # 最长周期
 
-        tau_init = max(min(float(tau_init), self.tau_max - 1e-4), self.tau_min + 1e-4) #初始周期长度
-        tau_ratio = (tau_init - self.tau_min) / (self.tau_max - self.tau_min) # 归一化
-        tau_ratio = min(max(tau_ratio, 1e-4), 1.0 - 1e-4) # 限制在0-1之间
+        tau_init = max(min(float(tau_init), self.tau_max - 1e-4), self.tau_min + 1e-4)  # 初始周期长度
+        tau_ratio = (tau_init - self.tau_min) / (self.tau_max - self.tau_min)  # 归一化
+        tau_ratio = min(max(tau_ratio, 1e-4), 1.0 - 1e-4)  # 限制在0-1之间
         self.raw_tau = nn.Parameter(torch.logit(torch.tensor(tau_ratio)))
-        self.base_harmonic_logit = nn.Parameter(torch.tensor(0.0)) # base周期权重
+        self.base_harmonic_logit = nn.Parameter(torch.tensor(0.0))  # base周期权重
 
-        gate_hidden = max(16, stats_dim * 8) # 门控MLP的隐藏宽度
+        gate_hidden = max(16, stats_dim * 8)  # 门控MLP的隐藏宽度
         self.query_gate = nn.Sequential(
             nn.Linear(stats_dim, gate_hidden),
             nn.GELU(),
@@ -31,20 +42,35 @@ class DynamicPeriodEstimator(nn.Module):
         # 从输入序列中提取候选周期，并给每个周期分配权重。
         # x_input: (B, C, S)
         B, _, S = x_input.shape
-        centered = x_input - x_input.mean(dim=-1, keepdim=True) # 中心化
-        spectrum = torch.fft.rfft(centered, dim=-1) # 傅里叶变换
-        amplitude = spectrum.abs().mean(dim=1)  # (B, F)在通道维求平均，把多通道频谱合成为一个代表性频谱，用于后续统一的周期候选提取。
+        centered = x_input - x_input.mean(dim=-1, keepdim=True)  # 中心化
+        spectrum = torch.fft.rfft(centered, dim=-1)  #光谱 傅里叶变换
+        amplitude = spectrum.abs().mean(dim=1)  #振幅 (B, F)在通道维求平均，把多通道频谱合成为一个代表性频谱，用于后续统一的周期候选提取。
         amplitude[:, 0] = 0.0
 
         valid_bins = max(0, amplitude.shape[-1] - 1)
-        topk = min(self.spectrum_k, valid_bins)
-        if topk > 0:
-            topk_vals, topk_idx = torch.topk(amplitude[:, 1:], k=topk, dim=-1)
-            topk_idx = topk_idx + 1
-            periods = (float(S) / topk_idx.float()).clamp(self.tau_min, self.tau_max)
-        else:
-            topk_vals = amplitude.new_zeros(B, 0)
-            periods = amplitude.new_zeros(B, 0)
+        k_slots = min(self.spectrum_k, valid_bins)
+        valid_amp = amplitude[:, 1:]
+        if self.spectrum_mode == "amplitude_topk":
+            topk_vals, rel_idx = torch.topk(valid_amp, k=k_slots, dim=-1)
+            topk_idx = rel_idx + 1
+        else:  # energy_cum: sort by |X|^2, mask later bins after cumulative-energy prefix
+            # 按 |X|^2（能量）降序排列；用累计能量达 spectrum_cum_ratio 的前 n90
+            # 个 bin 作为“有效”候选，其余 k_slots 槽位先验置零（张量仍保持 (B, k_slots)）。
+            power = valid_amp * valid_amp
+            total = power.sum(dim=-1, keepdim=True).clamp(1e-8)
+            sorted_p, rel_idx = torch.topk(power, k=valid_bins, dim=-1)
+            frac = sorted_p.cumsum(dim=-1) / total
+            m = self.spectrum_cum_ratio
+            n90 = (frac < m).to(torch.long).sum(dim=-1) + 1
+            n90 = n90.clamp(1, valid_bins)
+            # 取能量最高的 k_slots 个 bin 的顺序，与 n90 对齐做掩码
+            rel_top = rel_idx[:, :k_slots]
+            topk_idx = rel_top + 1
+            topk_vals = torch.gather(valid_amp, 1, rel_top)
+            col = torch.arange(k_slots, device=amplitude.device).view(1, -1).expand(B, -1)
+            mask_90 = col < n90.view(B, 1)
+            topk_vals = topk_vals * mask_90.to(topk_vals.dtype)
+        periods = (float(S) / topk_idx.float()).clamp(self.tau_min, self.tau_max)
 
         if valid_bins > 0:
             valid_amp = amplitude[:, 1:]
@@ -71,38 +97,13 @@ class DynamicPeriodEstimator(nn.Module):
         return tau_all, tau_weights, spec_stats
 
 
-class DGTR(nn.Module):
-    # \subsection{自适应多分支时序融合（Adaptive Multi-Branch Temporal Fusion）}
-    # Code anchor: multi-branch Conv2d retrieval with branch_weight gating.
-    def __init__(self, d_series, c, CI=True, period_len=24, branch_kernels=None, agg=True):
-        super(DGTR, self).__init__()
-        self.agg = agg
-        self.period_len = period_len
-        self.c = c
-        self.branch_kernels = self._normalize_kernels(branch_kernels)
-        self.num_branches = len(self.branch_kernels)
+class ChannelBranchMix(nn.Module):
+    """Per-channel multi-branch Conv2d fused by sample-wise branch_weight."""
 
-        self.q_norm = nn.LayerNorm(d_series)
-        self.linear = nn.Linear(d_series, d_series)
-        self.CI = CI
-        if self.CI:
-            self.ds_convs = nn.ModuleList([
-                nn.ModuleList([
-                    nn.Conv2d(
-                        in_channels=1,
-                        out_channels=1,
-                        kernel_size=(2, kernel),
-                        stride=1,
-                        padding=(0, kernel // 2),
-                        padding_mode="zeros",
-                        bias=False,
-                    )
-                    for kernel in self.branch_kernels
-                ])
-                for _ in range(self.c)
-            ])
-        else:
-            self.branches = nn.ModuleList([
+    def __init__(self, branch_kernels):
+        super().__init__()
+        self.convs = nn.ModuleList(
+            [
                 nn.Conv2d(
                     in_channels=1,
                     out_channels=1,
@@ -112,8 +113,38 @@ class DGTR(nn.Module):
                     padding_mode="zeros",
                     bias=False,
                 )
-                for kernel in self.branch_kernels
-            ])
+                for kernel in branch_kernels
+            ]
+        )
+        self.num_branches = len(self.convs)
+
+    def forward(self, x, branch_weight):
+        # x: (B, 1, 2, S), branch_weight: (B, num_branches)
+        B = x.shape[0]
+        branch_outs = [conv(x).squeeze(2) for conv in self.convs]  # noqa: F841 — B used in view below
+        stacked = torch.stack(branch_outs, dim=1)
+        mixed = (stacked * branch_weight.view(B, self.num_branches, 1, 1)).sum(dim=1)
+        return mixed.unsqueeze(1)
+
+
+class SAPMixer(nn.Module):
+    # \subsection{自适应多分支时序融合（Adaptive Multi-Branch Temporal Fusion）}
+    # Code anchor: multi-branch Conv2d retrieval with branch_weight gating.
+
+    def __init__(self, d_series, c, period_len=24, branch_kernels=None, agg=True):
+        super(SAPMixer, self).__init__()
+        self.agg = agg
+        self.period_len = period_len
+        self.c = c
+        self.branch_kernels = self._normalize_kernels(branch_kernels)
+        self.num_branches = len(self.branch_kernels)
+
+        self.q_norm = nn.LayerNorm(d_series)
+        self.linear = nn.Linear(d_series, d_series)
+        self.ds_convs = nn.ModuleList(
+            ChannelBranchMix(self.branch_kernels) for _ in range(self.c)
+        )
+
 
     def _normalize_kernels(self, branch_kernels):
         if not branch_kernels:
@@ -145,25 +176,13 @@ class DGTR(nn.Module):
             branch_weight = branch_weight.clamp_min(1e-6)
             branch_weight = branch_weight / branch_weight.sum(dim=-1, keepdim=True)
 
-        if self.CI:
-            conv_outs = []
-            for channel in range(self.c):
-                channel_in = out[:, channel, :, :].unsqueeze(1)  # (B, 1, 2, S)
-                branch_outs = [
-                    self.ds_convs[channel][branch_id](channel_in).squeeze(2)  # (B, 1, S)
-                    for branch_id in range(self.num_branches)
-                ]
-                stacked = torch.stack(branch_outs, dim=1)  # (B, N, 1, S)
-                mixed = (stacked * branch_weight.view(B, self.num_branches, 1, 1)).sum(dim=1)  # (B, 1, S)
-                conv_outs.append(mixed)
-            conv_out = torch.cat(conv_outs, dim=1)  # (B, C, S)
-        else:
-            out = out.reshape(-1, 1, 2, S)  # (B*C, 1, 2, S)
-            branch_outs = [branch(out).squeeze(2) for branch in self.branches]  # N * [(B*C, 1, S)]
-            stacked = torch.stack(branch_outs, dim=1)  # (B*C, N, 1, S)
-            expanded_weight = branch_weight.repeat_interleave(C, dim=0).view(B * C, self.num_branches, 1, 1)
-            conv_out = (stacked * expanded_weight).sum(dim=1)  # (B*C, 1, S)
-            conv_out = conv_out.reshape(-1, C, S)  # (B, C, S)
+        conv_outs = []
+        for channel in range(self.c):
+            channel_in = out[:, channel, :, :].unsqueeze(1)  # (B, 1, 2, S)
+            # ChannelBranchMix: all branches are fused inside with branch_weight
+            mixed = self.ds_convs[channel](channel_in, branch_weight).squeeze(2)  # (B, 1, S)
+            conv_outs.append(mixed)
+        conv_out = torch.cat(conv_outs, dim=1)  # (B, C, S)
         return conv_out
 
 
@@ -178,11 +197,12 @@ class Model(nn.Module):
 
         self.d_model = configs.d_model
         self.dropout = configs.dropout
-        self.individual = configs.individual
 
-        self.spectrum_k = max(1, int(getattr(configs, 'dgtr_spectrum_k', 4)))
-        self.use_multiscale = bool(int(getattr(configs, 'dgtr_use_multiscale', 1)))
-        branch_kernels = self._parse_branch_kernels(getattr(configs, 'dgtr_branch_kernels', '3,7,15,31'))
+        self.spectrum_k = max(1, int(getattr(configs, 'sapmixer_spectrum_k', 4)))
+        self.spectrum_mode = str(getattr(configs, "sapmixer_spectrum_mode", "energy_cum"))
+        self.spectrum_cum_ratio = float(getattr(configs, "sapmixer_spectrum_cum_ratio", 0.9))
+        self.use_multiscale = bool(int(getattr(configs, 'sapmixer_use_multiscale', 1)))
+        branch_kernels = self._parse_branch_kernels(getattr(configs, 'sapmixer_branch_kernels', '3,7,15,31'))
 
         self.tau_min = float(getattr(configs, 'learnable_tau_min', 2.0))
         self.tau_max = float(getattr(configs, 'learnable_tau_max', 512.0))
@@ -200,12 +220,13 @@ class Model(nn.Module):
             tau_min=self.tau_min,
             tau_max=self.tau_max,
             tau_init=tau_init,
+            spectrum_mode=self.spectrum_mode,
+            spectrum_cum_ratio=self.spectrum_cum_ratio,
         )
 
-        self.DGTR = DGTR(
+        self.sap_mixer = SAPMixer(
             d_series=self.seq_len,
             c=self.enc_in,
-            CI=self.individual,
             branch_kernels=branch_kernels,
             agg=False,
         )
@@ -214,7 +235,7 @@ class Model(nn.Module):
         self.branch_gate = nn.Sequential(
             nn.Linear(3, gate_hidden),
             nn.GELU(),
-            nn.Linear(gate_hidden, self.DGTR.num_branches),
+            nn.Linear(gate_hidden, self.sap_mixer.num_branches),
         )
 
         self.input_proj = nn.Linear(self.seq_len, self.d_model)
@@ -281,9 +302,9 @@ class Model(nn.Module):
 
         # \subsection{自适应多分支时序融合（Adaptive Multi-Branch Temporal Fusion）}
         # Code anchor: compute branch-wise gates from spectral stats, then
-        # fuse multi-branch temporal retrieval outputs in DGTR.
+        # fuse multi-branch temporal mixing outputs in SAPMixer.
         branch_weight = F.softmax(self.branch_gate(spec_stats), dim=-1)
-        global_information = self.DGTR(x_input, query_input, branch_weight=branch_weight)
+        global_information = self.sap_mixer(x_input, query_input, branch_weight=branch_weight)
 
         # Projection + MLP
         input_proj = self.input_proj(x_input + global_information)
@@ -293,4 +314,3 @@ class Model(nn.Module):
         # RevIN de-normalize
         output = output * torch.sqrt(seq_var) + seq_mean
         return output
-

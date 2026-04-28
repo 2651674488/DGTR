@@ -1,8 +1,8 @@
-model_name=DGTR
+model_name=SAPMixer
 
 root_path_name=./dataset/
 data_path_name=ETTm1.csv
-model_id_name=ETTm1DynamicOnly
+model_id_name=ETTm1
 data_name=ETTm1
 
 seq_len=96
@@ -14,7 +14,7 @@ do
       --is_training 1 \
       --root_path $root_path_name \
       --data_path $data_path_name \
-      --model_id $model_id_name'_'$seq_len'_'$pred_len'_dynamic_only' \
+      --model_id $model_id_name'_'$seq_len'_'$pred_len \
       --model $model_name \
       --data $data_name \
       --features M \
@@ -22,9 +22,9 @@ do
       --pred_len $pred_len \
       --enc_in 7 \
       --cycle 96 \
-      --dgtr_spectrum_k 4 \
-      --dgtr_branch_kernels 3,7,15,31 \
-      --dgtr_use_multiscale 1 \
+      --sapmixer_spectrum_k 4 \
+      --sapmixer_branch_kernels 3,7,15,31 \
+      --sapmixer_use_multiscale 1 \
       --train_epochs 30 \
       --patience 5 \
       --dropout 0.5 \
