@@ -14,7 +14,6 @@ class DynamicPeriodEstimator(nn.Module):
         tau_min,
         tau_max,
         tau_init,
-        stats_dim=3,
         spectrum_mode="energy_cum",
         spectrum_cum_ratio=0.9,
     ):
@@ -30,13 +29,6 @@ class DynamicPeriodEstimator(nn.Module):
         tau_ratio = min(max(tau_ratio, 1e-4), 1.0 - 1e-4)  # 限制在0-1之间
         self.raw_tau = nn.Parameter(torch.logit(torch.tensor(tau_ratio)))
         self.base_harmonic_logit = nn.Parameter(torch.tensor(0.0))  # base周期权重
-
-        gate_hidden = max(16, stats_dim * 8)  # 门控MLP的隐藏宽度
-        self.query_gate = nn.Sequential(
-            nn.Linear(stats_dim, gate_hidden),
-            nn.GELU(),
-            nn.Linear(gate_hidden, self.spectrum_k + 1),
-        )
 
     def forward(self, x_input):
         # 从输入序列中提取候选周期，并给每个周期分配权重。
@@ -72,29 +64,15 @@ class DynamicPeriodEstimator(nn.Module):
             topk_vals = topk_vals * mask_90.to(topk_vals.dtype)
         periods = (float(S) / topk_idx.float()).clamp(self.tau_min, self.tau_max)
 
-        if valid_bins > 0:
-            valid_amp = amplitude[:, 1:]
-            spec_stats = torch.stack(
-                [
-                    valid_amp.mean(dim=-1),
-                    valid_amp.max(dim=-1).values,
-                    valid_amp.std(dim=-1, unbiased=False),
-                ],
-                dim=-1,
-            )
-        else:
-            spec_stats = amplitude.new_zeros(B, 3)
-
         tau_base = self.tau_min + (self.tau_max - self.tau_min) * torch.sigmoid(self.raw_tau)
         tau_base = tau_base.expand(B, 1)
         tau_all = torch.cat([tau_base, periods], dim=1)
 
         base_score = self.base_harmonic_logit.expand(B, 1)
         prior_scores = torch.cat([base_score, topk_vals], dim=1)
-        tau_logits = self.query_gate(spec_stats)[:, :tau_all.shape[1]] + prior_scores
-        tau_weights = F.softmax(tau_logits, dim=-1)
-        # tau_all（候选周期）、tau_weights（对应权重）、spec_stats（频谱统计）。用于后续的查询构建。
-        return tau_all, tau_weights, spec_stats
+        tau_weights = F.softmax(prior_scores, dim=-1)
+        # tau_all（候选周期）、tau_weights（对应权重）。用于后续的查询构建。
+        return tau_all, tau_weights
 
 
 class ChannelBranchMix(nn.Module):
@@ -231,12 +209,7 @@ class Model(nn.Module):
             agg=False,
         )
 
-        gate_hidden = max(16, self.enc_in)
-        self.branch_gate = nn.Sequential(
-            nn.Linear(3, gate_hidden),
-            nn.GELU(),
-            nn.Linear(gate_hidden, self.sap_mixer.num_branches),
-        )
+        self.log_Tm = nn.Parameter(torch.tensor(0.0))  # 初始 Tm=1
 
         self.input_proj = nn.Linear(self.seq_len, self.d_model)
         self.model = nn.Sequential(
@@ -275,6 +248,19 @@ class Model(nn.Module):
         query_input = (proj * tau_weight.view(B, tau_all.shape[1], 1, 1)).sum(dim=1)  # (B, C, S)
         return query_input
 
+    def _build_branch_weight_from_periods(self, tau_all, tau_weight):
+        # Period-kernel matching: score_j = sum_i w_i * exp(-|log(tau_i)-log(k_j)| / T)
+        Tm = torch.exp(self.log_Tm).clamp(1e-2, 10.0)
+        kernel_tensor = tau_all.new_tensor(self.sap_mixer.branch_kernels).clamp_min(1e-6)  # (M,)
+        tau_all_safe = tau_all.clamp_min(1e-6)  # (B, K+1)
+
+        log_tau = torch.log(tau_all_safe).unsqueeze(-1)  # (B, K+1, 1)
+        log_kernel = torch.log(kernel_tensor).view(1, 1, -1)  # (1, 1, M)
+        dist = (log_tau - log_kernel).abs()  # (B, K+1, M)
+        match = torch.exp(-dist / Tm)  # (B, K+1, M)
+        score = (tau_weight.unsqueeze(-1) * match).sum(dim=1)  # (B, M)
+        return F.softmax(score, dim=-1)
+
     def forward(self, x, cycle_index=None):
         # RevIN normalize
         seq_mean = torch.mean(x, dim=1, keepdim=True)
@@ -286,7 +272,7 @@ class Model(nn.Module):
 
         # \subsection{动态周期感知检索（Dynamic Period-Aware Retrieval）}
         # Code anchor: estimate candidate periods and sample-wise period weights.
-        tau_all, tau_weight, spec_stats = self.period_estimator(x_input)
+        tau_all, tau_weight = self.period_estimator(x_input)
         if not self.use_multiscale:
             tau_weight = tau_weight.new_zeros(tau_weight.shape)
             tau_weight[:, 0] = 1.0
@@ -301,9 +287,8 @@ class Model(nn.Module):
         )
 
         # \subsection{自适应多分支时序融合（Adaptive Multi-Branch Temporal Fusion）}
-        # Code anchor: compute branch-wise gates from spectral stats, then
-        # fuse multi-branch temporal mixing outputs in SAPMixer.
-        branch_weight = F.softmax(self.branch_gate(spec_stats), dim=-1)
+        # Code anchor: period-kernel matching gates branch fusion in SAPMixer.
+        branch_weight = self._build_branch_weight_from_periods(tau_all, tau_weight)
         global_information = self.sap_mixer(x_input, query_input, branch_weight=branch_weight)
 
         # Projection + MLP

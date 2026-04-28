@@ -3,5 +3,6 @@ test_results/
 results/
 dataset/
 __pycache__/
+tex/
 .idea/
 result.txt
