@@ -18,15 +18,13 @@ class DynamicPeriodEstimator(nn.Module):
         spectrum_cum_ratio=0.9,
     ):
         super().__init__()
-        self.spectrum_k = max(1, int(spectrum_k))  # 周期数
-        self.spectrum_mode = str(spectrum_mode) if spectrum_mode is not None else "energy_cum"
-        self.spectrum_cum_ratio = min(max(float(spectrum_cum_ratio), 0.0), 1.0)
-        self.tau_min = float(tau_min)  # 最短周期
-        self.tau_max = float(tau_max)  # 最长周期
+        self.spectrum_k = int(spectrum_k)
+        self.spectrum_mode = str(spectrum_mode)
+        self.spectrum_cum_ratio = float(spectrum_cum_ratio)
+        self.tau_min = float(tau_min)
+        self.tau_max = float(tau_max)
 
-        tau_init = max(min(float(tau_init), self.tau_max - 1e-4), self.tau_min + 1e-4)  # 初始周期长度
-        tau_ratio = (tau_init - self.tau_min) / (self.tau_max - self.tau_min)  # 归一化
-        tau_ratio = min(max(tau_ratio, 1e-4), 1.0 - 1e-4)  # 限制在0-1之间
+        tau_ratio = (float(tau_init) - self.tau_min) / (self.tau_max - self.tau_min)
         self.raw_tau = nn.Parameter(torch.logit(torch.tensor(tau_ratio)))
         self.base_harmonic_logit = nn.Parameter(torch.tensor(0.0))  # base周期权重
 
@@ -39,7 +37,7 @@ class DynamicPeriodEstimator(nn.Module):
         amplitude = spectrum.abs().mean(dim=1)  #振幅 (B, F)在通道维求平均，把多通道频谱合成为一个代表性频谱，用于后续统一的周期候选提取。
         amplitude[:, 0] = 0.0
 
-        valid_bins = max(0, amplitude.shape[-1] - 1)
+        valid_bins = amplitude.shape[-1] - 1
         k_slots = min(self.spectrum_k, valid_bins)
         valid_amp = amplitude[:, 1:]
         if self.spectrum_mode == "amplitude_topk":
@@ -49,12 +47,11 @@ class DynamicPeriodEstimator(nn.Module):
             # 按 |X|^2（能量）降序排列；用累计能量达 spectrum_cum_ratio 的前 n90
             # 个 bin 作为“有效”候选，其余 k_slots 槽位先验置零（张量仍保持 (B, k_slots)）。
             power = valid_amp * valid_amp
-            total = power.sum(dim=-1, keepdim=True).clamp(1e-8)
+            total = power.sum(dim=-1, keepdim=True)
             sorted_p, rel_idx = torch.topk(power, k=valid_bins, dim=-1)
             frac = sorted_p.cumsum(dim=-1) / total
             m = self.spectrum_cum_ratio
             n90 = (frac < m).to(torch.long).sum(dim=-1) + 1
-            n90 = n90.clamp(1, valid_bins)
             # 取能量最高的 k_slots 个 bin 的顺序，与 n90 对齐做掩码
             rel_top = rel_idx[:, :k_slots]
             topk_idx = rel_top + 1
@@ -99,11 +96,10 @@ class ChannelBranchMix(nn.Module):
     def forward(self, x, branch_weight):
         # x: (B, 1, 2, S), branch_weight: (B, num_branches)
         B = x.shape[0]
-        branch_outs = [conv(x).squeeze(2) for conv in self.convs]  # noqa: F841 — B used in view below
+        branch_outs = [conv(x).squeeze(2) for conv in self.convs]
         stacked = torch.stack(branch_outs, dim=1)
         mixed = (stacked * branch_weight.view(B, self.num_branches, 1, 1)).sum(dim=1)
-        return mixed.unsqueeze(1)
-
+        return mixed
 
 class SAPMixer(nn.Module):
     # \subsection{自适应多分支时序融合（Adaptive Multi-Branch Temporal Fusion）}
@@ -125,40 +121,34 @@ class SAPMixer(nn.Module):
 
 
     def _normalize_kernels(self, branch_kernels):
-        if not branch_kernels:
-            branch_kernels = [1 + 2 * (self.period_len // 2)]
+        kernels = branch_kernels or [1 + 2 * (self.period_len // 2)]
         norm_kernels = []
-        for kernel in branch_kernels:
-            k = max(1, int(kernel))
+        for kernel in kernels:
+            k = int(kernel)
             if k % 2 == 0:
                 k += 1
             norm_kernels.append(k)
         return norm_kernels
 
-    def forward(self, x, q, branch_weight=None):
-        B, C, S = x.shape
+    def forward(self, x, q, branch_weight):
+        _, C, S = x.shape
         # Step 1: Mapping（q 在时间上逐通道 LayerNorm 再进 linear）
         global_query = self.linear(self.q_norm(q))
 
         # Step 2: GTA mode, aggregate along temporal length.
-        if self.agg:
-            weight = F.softmax(global_query, dim=-1)  # normalize over length S
-            global_query = torch.sum(global_query * weight, dim=-1, keepdim=True)  # (B, C, 1)
-            global_query = global_query.repeat(1, 1, S)  # (B, C, S)
+        # if self.agg:
+        #     weight = F.softmax(global_query, dim=-1)  # normalize over length S
+        #     global_query = torch.sum(global_query * weight, dim=-1, keepdim=True)  # (B, C, 1)
+        #     global_query = global_query.repeat(1, 1, S)  # (B, C, S)
 
         # Step 3: Fuse
         out = torch.stack([x, global_query], dim=2)  # (B, C, 2, S)
-        if branch_weight is None:
-            branch_weight = out.new_full((B, self.num_branches), 1.0 / self.num_branches)
-        else:
-            branch_weight = branch_weight.clamp_min(1e-6)
-            branch_weight = branch_weight / branch_weight.sum(dim=-1, keepdim=True)
 
         conv_outs = []
         for channel in range(self.c):
             channel_in = out[:, channel, :, :].unsqueeze(1)  # (B, 1, 2, S)
             # ChannelBranchMix: all branches are fused inside with branch_weight
-            mixed = self.ds_convs[channel](channel_in, branch_weight).squeeze(2)  # (B, 1, S)
+            mixed = self.ds_convs[channel](channel_in, branch_weight)  # (B, 1, S)
             conv_outs.append(mixed)
         conv_out = torch.cat(conv_outs, dim=1)  # (B, C, S)
         return conv_out
@@ -176,7 +166,7 @@ class Model(nn.Module):
         self.d_model = configs.d_model
         self.dropout = configs.dropout
 
-        self.spectrum_k = max(1, int(getattr(configs, 'sapmixer_spectrum_k', 4)))
+        self.spectrum_k = int(getattr(configs, 'sapmixer_spectrum_k', 4))
         self.spectrum_mode = str(getattr(configs, "sapmixer_spectrum_mode", "energy_cum"))
         self.spectrum_cum_ratio = float(getattr(configs, "sapmixer_spectrum_cum_ratio", 0.9))
         self.use_multiscale = bool(int(getattr(configs, 'sapmixer_use_multiscale', 1)))
@@ -184,8 +174,6 @@ class Model(nn.Module):
 
         self.tau_min = float(getattr(configs, 'learnable_tau_min', 2.0))
         self.tau_max = float(getattr(configs, 'learnable_tau_max', 512.0))
-        if self.tau_max <= self.tau_min:
-            raise ValueError('learnable_tau_max must be greater than learnable_tau_min')
         tau_init = float(getattr(configs, 'learnable_tau_init', -1.0))
         if tau_init <= 0:
             tau_init = float(self.cycle_len)
@@ -226,12 +214,8 @@ class Model(nn.Module):
     def _parse_branch_kernels(self, raw_branch_kernels):
         if isinstance(raw_branch_kernels, str):
             kernels = [item.strip() for item in raw_branch_kernels.split(',') if item.strip()]
-        elif isinstance(raw_branch_kernels, (list, tuple)):
-            kernels = list(raw_branch_kernels)
         else:
-            kernels = []
-        if not kernels:
-            kernels = [3, 7, 15, 31]
+            kernels = [int(x) for x in raw_branch_kernels]
         return [int(kernel) for kernel in kernels]
 
     def _build_multiscale_query(self, tau_all, tau_weight, seq_len, device):
@@ -250,22 +234,21 @@ class Model(nn.Module):
 
     def _build_branch_weight_from_periods(self, tau_all, tau_weight):
         # Period-kernel matching: score_j = sum_i w_i * exp(-|log(tau_i)-log(k_j)| / T)
-        Tm = torch.exp(self.log_Tm).clamp(1e-2, 10.0)
-        kernel_tensor = tau_all.new_tensor(self.sap_mixer.branch_kernels).clamp_min(1e-6)  # (M,)
-        tau_all_safe = tau_all.clamp_min(1e-6)  # (B, K+1)
-
-        log_tau = torch.log(tau_all_safe).unsqueeze(-1)  # (B, K+1, 1)
+        Tm = torch.exp(self.log_Tm)
+        kernel_tensor = tau_all.new_tensor(self.sap_mixer.branch_kernels)
+        log_tau = torch.log(tau_all).unsqueeze(-1)  # (B, K+1, 1)
         log_kernel = torch.log(kernel_tensor).view(1, 1, -1)  # (1, 1, M)
         dist = (log_tau - log_kernel).abs()  # (B, K+1, M)
         match = torch.exp(-dist / Tm)  # (B, K+1, M)
         score = (tau_weight.unsqueeze(-1) * match).sum(dim=1)  # (B, M)
         return F.softmax(score, dim=-1)
 
-    def forward(self, x, cycle_index=None):
+    def forward(self, x):
         # RevIN normalize
         seq_mean = torch.mean(x, dim=1, keepdim=True)
         seq_var = torch.var(x, dim=1, keepdim=True) + 1e-5
-        x = (x - seq_mean) / torch.sqrt(seq_var)
+        seq_std = seq_var.sqrt()
+        x = (x - seq_mean) / seq_std
 
         # (B, S, C) -> (B, C, S)
         x_input = x.permute(0, 2, 1)
@@ -297,5 +280,5 @@ class Model(nn.Module):
         output = self.output_proj(hidden + input_proj).permute(0, 2, 1)
 
         # RevIN de-normalize
-        output = output * torch.sqrt(seq_var) + seq_mean
+        output = output * seq_std + seq_mean
         return output
