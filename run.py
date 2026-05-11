@@ -36,6 +36,7 @@ def main():
     parser.add_argument('--cycle', type=int, default=24, help='cycle length')
     parser.add_argument('--sapmixer_spectrum_k', type=int, default=4,
                         help='SAPMixer: number of spectrum peaks for soft multi-period harmonic mix')
+    
     parser.add_argument(
         '--sapmixer_spectrum_mode',
         type=str,
@@ -51,8 +52,8 @@ def main():
         help='SAPMixer (energy_cum): use bins in order of energy until this fraction of '
         'non-DC energy (remaining candidate slots in the same top-K list get prior 0). Use 1.0 to keep all K.',
     )
-    parser.add_argument('--sapmixer_branch_kernels', type=str, default='3,7,15,31',
-                        help='SAPMixer: comma-separated temporal kernels for multi-branch fusion')
+    parser.add_argument('--sapmixer_period_array', type=str, default='12,24,48,96',
+                        help='SAPMixer: comma-separated temporal period array for multi-branch fusion')
     parser.add_argument('--sapmixer_use_multiscale', type=int, default=1,
                         help='SAPMixer: 1 enables adaptive multi-period query, 0 keeps only base period')
     parser.add_argument('--learnable_tau_min', type=float, default=2.0,

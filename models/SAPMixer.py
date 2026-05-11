@@ -170,7 +170,10 @@ class Model(nn.Module):
         self.spectrum_mode = str(getattr(configs, "sapmixer_spectrum_mode", "energy_cum"))
         self.spectrum_cum_ratio = float(getattr(configs, "sapmixer_spectrum_cum_ratio", 0.9))
         self.use_multiscale = bool(int(getattr(configs, 'sapmixer_use_multiscale', 1)))
-        branch_kernels = self._parse_branch_kernels(getattr(configs, 'sapmixer_branch_kernels', '3,7,15,31'))
+        self.period_array = self._parse_period_array_list(
+            getattr(configs, 'sapmixer_period_array', '3,7,15,31')
+        )
+        branch_kernels = self._parse_branch_kernels(self.period_array)
 
         self.tau_min = float(getattr(configs, 'learnable_tau_min', 2.0))
         self.tau_max = float(getattr(configs, 'learnable_tau_max', 512.0))
@@ -211,12 +214,26 @@ class Model(nn.Module):
             nn.Linear(self.d_model, self.pred_len),
         )
 
-    def _parse_branch_kernels(self, raw_branch_kernels):
-        if isinstance(raw_branch_kernels, str):
-            kernels = [item.strip() for item in raw_branch_kernels.split(',') if item.strip()]
+    def _parse_period_array_list(period_array):
+        """Comma-separated string or sequence -> list of floats (for tensors / matching)."""
+        if isinstance(period_array, str):
+            return [float(x.strip()) for x in period_array.split(',') if x.strip()]
+        return [float(x) for x in period_array]
+
+    def _parse_branch_kernels(self, period_array):
+        """Effective scales: round(period * 0.25), clamp to >=1, then force odd (for Conv padding)."""
+        if isinstance(period_array, str):
+            nums = self._parse_period_array_list(period_array)
         else:
-            kernels = [int(x) for x in raw_branch_kernels]
-        return [int(kernel) for kernel in kernels]
+            nums = [float(x) for x in period_array]
+        out = []
+        for v in nums:
+            k = int(round(v * 0.25))
+            k = max(k, 1)
+            if k % 2 == 0:
+                k += 1
+            out.append(k)
+        return out
 
     def _build_multiscale_query(self, tau_all, tau_weight, seq_len, device):
         # \subsection{多尺度相位查询构建（Multi-Scale Phase Query Construction）}
@@ -224,21 +241,20 @@ class Model(nn.Module):
         # then project and merge by tau_weight to form query_input.
         B = tau_all.shape[0]
         time_index = torch.arange(seq_len, device=device, dtype=torch.float32).view(1, -1).expand(B, -1)
-        theta = (2.0 * torch.pi * time_index.unsqueeze(1)) / tau_all.unsqueeze(-1)  # (B, K+1, S)
-        phase_feats = torch.stack([torch.sin(theta), torch.cos(theta)], dim=-1)  # (B, K+1, S, 2)
-
-        proj = self.phase_proj(phase_feats.reshape(-1, seq_len, 2))
-        proj = proj.reshape(B, tau_all.shape[1], seq_len, self.enc_in).permute(0, 1, 3, 2)  # (B, K+1, C, S)
-        query_input = (proj * tau_weight.view(B, tau_all.shape[1], 1, 1)).sum(dim=1)  # (B, C, S)
+        theta = (2.0 * torch.pi * time_index.unsqueeze(1)) / tau_all.unsqueeze(-1)
+        phase_feats = torch.stack([torch.sin(theta), torch.cos(theta)], dim=-1)
+        proj = self.phase_proj(phase_feats)  # (B, K+1, S, enc_in)
+        proj = proj.permute(0, 1, 3, 2)  # (B, K+1, enc_in, S)
+        query_input = (proj * tau_weight.view(B, tau_all.shape[1], 1, 1)).sum(dim=1)  # (B, enc_in, S)
         return query_input
 
     def _build_branch_weight_from_periods(self, tau_all, tau_weight):
         # Period-kernel matching: score_j = sum_i w_i * exp(-|log(tau_i)-log(k_j)| / T)
         Tm = torch.exp(self.log_Tm)
-        kernel_tensor = tau_all.new_tensor(self.sap_mixer.branch_kernels)
+        period_tensor = tau_all.new_tensor(self.period_array)
         log_tau = torch.log(tau_all).unsqueeze(-1)  # (B, K+1, 1)
-        log_kernel = torch.log(kernel_tensor).view(1, 1, -1)  # (1, 1, M)
-        dist = (log_tau - log_kernel).abs()  # (B, K+1, M)
+        log_period = torch.log(period_tensor).view(1, 1, -1)  # (1, 1, M)
+        dist = (log_tau - log_period).abs()  # (B, K+1, M)
         match = torch.exp(-dist / Tm)  # (B, K+1, M)
         score = (tau_weight.unsqueeze(-1) * match).sum(dim=1)  # (B, M)
         return F.softmax(score, dim=-1)
