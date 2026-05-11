@@ -24,6 +24,7 @@ do
       --enc_in 321 \
       --cycle 168 \
       --sapmixer_use_multiscale 1 \
+      --sapmixer_period_array 84,168,336,720 \
       --train_epochs 30 \
       --patience 5 \
       --itr 1 --batch_size 32 --learning_rate 0.003 --random_seed $random_seed

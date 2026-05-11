@@ -23,7 +23,7 @@ do
       --enc_in 7 \
       --cycle 96 \
       --sapmixer_spectrum_k 4 \
-      --sapmixer_branch_kernels 3,7,15,31 \
+      --sapmixer_period_array 48,96,192,384 \
       --sapmixer_use_multiscale 1 \
       --train_epochs 30 \
       --patience 5 \

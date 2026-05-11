@@ -22,7 +22,7 @@ do
       --pred_len $pred_len \
       --enc_in 7 \
       --cycle 24 \
-      --sapmixer_branch_kernels 12,24,48,96 \
+      --sapmixer_period_array 12,24,48,96 \
       --sapmixer_use_multiscale 1 \
       --train_epochs 30 \
       --patience 5 \

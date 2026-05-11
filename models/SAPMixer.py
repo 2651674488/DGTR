@@ -14,12 +14,10 @@ class DynamicPeriodEstimator(nn.Module):
         tau_min,
         tau_max,
         tau_init,
-        spectrum_mode="energy_cum",
         spectrum_cum_ratio=0.9,
     ):
         super().__init__()
         self.spectrum_k = int(spectrum_k)
-        self.spectrum_mode = str(spectrum_mode)
         self.spectrum_cum_ratio = float(spectrum_cum_ratio)
         self.tau_min = float(tau_min)
         self.tau_max = float(tau_max)
@@ -40,25 +38,21 @@ class DynamicPeriodEstimator(nn.Module):
         valid_bins = amplitude.shape[-1] - 1
         k_slots = min(self.spectrum_k, valid_bins)
         valid_amp = amplitude[:, 1:]
-        if self.spectrum_mode == "amplitude_topk":
-            topk_vals, rel_idx = torch.topk(valid_amp, k=k_slots, dim=-1)
-            topk_idx = rel_idx + 1
-        else:  # energy_cum: sort by |X|^2, mask later bins after cumulative-energy prefix
-            # 按 |X|^2（能量）降序排列；用累计能量达 spectrum_cum_ratio 的前 n90
-            # 个 bin 作为“有效”候选，其余 k_slots 槽位先验置零（张量仍保持 (B, k_slots)）。
-            power = valid_amp * valid_amp
-            total = power.sum(dim=-1, keepdim=True)
-            sorted_p, rel_idx = torch.topk(power, k=valid_bins, dim=-1)
-            frac = sorted_p.cumsum(dim=-1) / total
-            m = self.spectrum_cum_ratio
-            n90 = (frac < m).to(torch.long).sum(dim=-1) + 1
-            # 取能量最高的 k_slots 个 bin 的顺序，与 n90 对齐做掩码
-            rel_top = rel_idx[:, :k_slots]
-            topk_idx = rel_top + 1
-            topk_vals = torch.gather(valid_amp, 1, rel_top)
-            col = torch.arange(k_slots, device=amplitude.device).view(1, -1).expand(B, -1)
-            mask_90 = col < n90.view(B, 1)
-            topk_vals = topk_vals * mask_90.to(topk_vals.dtype)
+        # 按 |X|^2（能量）降序排列；用累计能量达 spectrum_cum_ratio 的前 n90
+        # 个 bin 作为“有效”候选，其余 k_slots 槽位先验置零（张量仍保持 (B, k_slots)）。
+        power = valid_amp * valid_amp
+        total = power.sum(dim=-1, keepdim=True)
+        sorted_p, rel_idx = torch.topk(power, k=valid_bins, dim=-1)
+        frac = sorted_p.cumsum(dim=-1) / total
+        m = self.spectrum_cum_ratio
+        n90 = (frac < m).to(torch.long).sum(dim=-1) + 1
+        # 取能量最高的 k_slots 个 bin 的顺序，与 n90 对齐做掩码
+        rel_top = rel_idx[:, :k_slots]
+        topk_idx = rel_top + 1
+        topk_vals = torch.gather(valid_amp, 1, rel_top)
+        col = torch.arange(k_slots, device=amplitude.device).view(1, -1).expand(B, -1)
+        mask_90 = col < n90.view(B, 1)
+        topk_vals = topk_vals * mask_90.to(topk_vals.dtype)
         periods = (float(S) / topk_idx.float()).clamp(self.tau_min, self.tau_max)
 
         tau_base = self.tau_min + (self.tau_max - self.tau_min) * torch.sigmoid(self.raw_tau)
@@ -167,12 +161,9 @@ class Model(nn.Module):
         self.dropout = configs.dropout
 
         self.spectrum_k = int(getattr(configs, 'sapmixer_spectrum_k', 4))
-        self.spectrum_mode = str(getattr(configs, "sapmixer_spectrum_mode", "energy_cum"))
         self.spectrum_cum_ratio = float(getattr(configs, "sapmixer_spectrum_cum_ratio", 0.9))
         self.use_multiscale = bool(int(getattr(configs, 'sapmixer_use_multiscale', 1)))
-        self.period_array = self._parse_period_array_list(
-            getattr(configs, 'sapmixer_period_array', '3,7,15,31')
-        )
+        self.period_array = self._parse_period_array_list(configs.sapmixer_period_array)
         branch_kernels = self._parse_branch_kernels(self.period_array)
 
         self.tau_min = float(getattr(configs, 'learnable_tau_min', 2.0))
@@ -189,7 +180,6 @@ class Model(nn.Module):
             tau_min=self.tau_min,
             tau_max=self.tau_max,
             tau_init=tau_init,
-            spectrum_mode=self.spectrum_mode,
             spectrum_cum_ratio=self.spectrum_cum_ratio,
         )
 
@@ -214,7 +204,7 @@ class Model(nn.Module):
             nn.Linear(self.d_model, self.pred_len),
         )
 
-    def _parse_period_array_list(period_array):
+    def _parse_period_array_list(self, period_array):
         """Comma-separated string or sequence -> list of floats (for tensors / matching)."""
         if isinstance(period_array, str):
             return [float(x.strip()) for x in period_array.split(',') if x.strip()]

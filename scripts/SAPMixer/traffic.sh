@@ -24,6 +24,7 @@ do
       --enc_in 862 \
       --cycle 168 \
       --sapmixer_use_multiscale 1 \
+      --sapmixer_period_array 84,168,336,720 \
       --individual 1 \
       --train_epochs 30 \
       --patience 5 \

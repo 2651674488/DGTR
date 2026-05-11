@@ -38,18 +38,10 @@ def main():
                         help='SAPMixer: number of spectrum peaks for soft multi-period harmonic mix')
     
     parser.add_argument(
-        '--sapmixer_spectrum_mode',
-        type=str,
-        default='energy_cum',
-        choices=['energy_cum', 'amplitude_topk'],
-        help='energy_cum: take top by energy then mask by cumulative 90% prefix; '
-        'amplitude_topk: legacy top-k by |spectrum| per bin',
-    )
-    parser.add_argument(
         '--sapmixer_spectrum_cum_ratio',
         type=float,
         default=0.9,
-        help='SAPMixer (energy_cum): use bins in order of energy until this fraction of '
+        help='SAPMixer: use bins in order of energy until this fraction of '
         'non-DC energy (remaining candidate slots in the same top-K list get prior 0). Use 1.0 to keep all K.',
     )
     parser.add_argument('--sapmixer_period_array', type=str, default='12,24,48,96',
