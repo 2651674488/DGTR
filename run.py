@@ -48,12 +48,6 @@ def main():
                         help='SAPMixer: comma-separated temporal period array for multi-branch fusion')
     parser.add_argument('--sapmixer_use_multiscale', type=int, default=1,
                         help='SAPMixer: 1 enables adaptive multi-period query, 0 keeps only base period')
-    parser.add_argument('--learnable_tau_min', type=float, default=2.0,
-                        help='SAPMixer: minimum learnable cycle length')
-    parser.add_argument('--learnable_tau_max', type=float, default=512.0,
-                        help='SAPMixer: maximum learnable cycle length')
-    parser.add_argument('--learnable_tau_init', type=float, default=-1.0,
-                        help='SAPMixer: initial cycle length, <=0 uses --cycle')
     parser.add_argument('--model_type', type=str, default='mlp', help='model type, options: [linear, mlp]')
 
     # PatchTST
@@ -140,20 +134,33 @@ def main():
 
     Exp = Exp_Main
 
-
-    if args.is_training:
-        for ii in range(args.itr):
-
-            # setting record of experiments
-            setting = '{}_{}_{}_ft{}_sl{}_pl{}_cycle{}_seed{}'.format(
+    def make_setting(seed):
+        if 'SAPMixer' in args.model:
+            return '{}_{}_{}_ft{}_sl{}_pl{}_seed{}'.format(
                 args.model_id,
                 args.model,
                 args.data,
                 args.features,
                 args.seq_len,
                 args.pred_len,
-                args.cycle,
-                fix_seed)
+                seed,
+            )
+        return '{}_{}_{}_ft{}_sl{}_pl{}_cycle{}_seed{}'.format(
+            args.model_id,
+            args.model,
+            args.data,
+            args.features,
+            args.seq_len,
+            args.pred_len,
+            args.cycle,
+            seed,
+        )
+
+    if args.is_training:
+        for ii in range(args.itr):
+
+            # setting record of experiments
+            setting = make_setting(fix_seed)
 
             exp = Exp(args)  # set experiments
             print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
@@ -169,15 +176,7 @@ def main():
             torch.cuda.empty_cache()
     else:
         ii = 0
-        setting = '{}_{}_{}_ft{}_sl{}_pl{}_cycle{}_seed{}'.format(
-            args.model_id,
-            args.model,
-            args.data,
-            args.features,
-            args.seq_len,
-            args.pred_len,
-            args.cycle,
-            fix_seed)
+        setting = make_setting(fix_seed)
 
         exp = Exp(args)  # set experiments
         print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))

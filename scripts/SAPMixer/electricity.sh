@@ -22,7 +22,6 @@ do
       --seq_len $seq_len \
       --pred_len $pred_len \
       --enc_in 321 \
-      --cycle 168 \
       --sapmixer_use_multiscale 1 \
       --sapmixer_period_array 84,168,336,720 \
       --train_epochs 30 \

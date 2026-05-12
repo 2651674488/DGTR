@@ -22,12 +22,9 @@ do
       --seq_len $seq_len \
       --pred_len $pred_len \
       --enc_in 358 \
-      --cycle 288 \
       --train_epochs 30 \
       --sapmixer_period_array 144,288,576,1152 \
       --patience 5 \
-      --use_revin 0 \
       --itr 1 --batch_size 32 --learning_rate 0.003 --random_seed $random_seed
 done
 done
-

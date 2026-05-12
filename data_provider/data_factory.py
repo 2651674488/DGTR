@@ -33,6 +33,7 @@ def data_provider(args, flag):
         batch_size = args.batch_size
         freq = args.freq
 
+    cycle_arg = None if 'SAPMixer' in args.model else args.cycle
     data_set = Data(
         root_path=args.root_path,
         data_path=args.data_path,
@@ -42,7 +43,7 @@ def data_provider(args, flag):
         target=args.target,
         timeenc=timeenc,
         freq=freq,
-        cycle=args.cycle
+        cycle=cycle_arg,
     )
     print(flag, len(data_set))
     data_loader = DataLoader(

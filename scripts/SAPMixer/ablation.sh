@@ -37,7 +37,6 @@ do
       --seq_len $seq_len \
       --pred_len $pred_len \
       --enc_in 7 \
-      --cycle 96 \
       --sapmixer_spectrum_k 4 \
       --sapmixer_branch_kernels 3,7,15,31 \
       --sapmixer_use_multiscale 1 \
@@ -58,7 +57,6 @@ do
       --seq_len $seq_len \
       --pred_len $pred_len \
       --enc_in 7 \
-      --cycle 96 \
       --sapmixer_spectrum_k 4 \
       --sapmixer_branch_kernels 3,7,15,31 \
       --sapmixer_use_multiscale 0 \
@@ -79,7 +77,6 @@ do
       --seq_len $seq_len \
       --pred_len $pred_len \
       --enc_in 7 \
-      --cycle 96 \
       --sapmixer_spectrum_k 4 \
       --sapmixer_branch_kernels 31 \
       --sapmixer_use_multiscale 1 \
@@ -100,7 +97,6 @@ do
       --seq_len $seq_len \
       --pred_len $pred_len \
       --enc_in 7 \
-      --cycle 96 \
       --sapmixer_spectrum_k 4 \
       --sapmixer_branch_kernels 3,7,15,31 \
       --sapmixer_use_multiscale 1 \

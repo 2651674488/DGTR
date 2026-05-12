@@ -21,7 +21,6 @@ do
       --seq_len $seq_len \
       --pred_len $pred_len \
       --enc_in 7 \
-      --cycle 96 \
       --sapmixer_spectrum_k 4 \
       --sapmixer_period_array 48,96,192,384 \
       --sapmixer_use_multiscale 1 \
