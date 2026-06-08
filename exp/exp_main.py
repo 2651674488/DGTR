@@ -340,7 +340,7 @@ class Exp_Main(Exp_Basic):
                     gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
                     pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
 
-                    visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
+                    visual(gt, pd, os.path.join(folder_path, str(i) + '.svg'))
                     # np.savetxt(os.path.join(folder_path, str(i) + '.txt'), pd)
                     # np.savetxt(os.path.join(folder_path, str(i) + 'true.txt'), gt)
 

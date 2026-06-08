@@ -6,6 +6,6 @@
 # sh scripts/SAPMixer/electricity.sh;
 # sh scripts/SAPMixer/traffic.sh;
 sh scripts/SAPMixer/pems03.sh;
-# sh scripts/SAPMixer/pems04.sh;
-# sh scripts/SAPMixer/pems07.sh;
-# sh scripts/SAPMixer/pems08.sh;
+sh scripts/SAPMixer/pems04.sh;
+sh scripts/SAPMixer/pems07.sh;
+sh scripts/SAPMixer/pems08.sh;

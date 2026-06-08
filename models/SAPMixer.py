@@ -53,7 +53,7 @@ class DynamicPeriodEstimator(nn.Module):
 
 
 class ChannelBranchMix(nn.Module):
-    """Per-channel multi-branch Conv2d fused by sample-wise branch_weight."""
+    """Per-channel multi-branch Conv2d fused by per-sample branch_weight (B, M)."""
 
     def __init__(self, branch_kernels):
         super().__init__()
@@ -111,25 +111,15 @@ class SAPMixer(nn.Module):
         return norm_kernels
 
     def forward(self, x, q, branch_weight):
-        # x, q: (B, C, S)；branch_weight: (B, num_branches)
+        # x, q: (B, C, S)；branch_weight: (B, C, num_branches)
         _, C, S = x.shape
-        # Step 1: Mapping（q 在时间上逐通道 LayerNorm 再进 linear）
-        global_query = self.linear(self.q_norm(q))  # (B, C, S)
 
-        # Step 2: GTA mode, aggregate along temporal length.
-        # if self.agg:
-        #     weight = F.softmax(global_query, dim=-1)  # normalize over length S
-        #     global_query = torch.sum(global_query * weight, dim=-1, keepdim=True)  # (B, C, 1)
-        #     global_query = global_query.repeat(1, 1, S)  # (B, C, S)
-
-        # Step 3: Fuse
-        out = torch.stack([x, global_query], dim=2)  # (B, C, 2, S)
+        out = torch.stack([x, q], dim=2)  # (B, C, 2, S)
 
         conv_outs = []
         for channel in range(self.c):
             channel_in = out[:, channel, :, :].unsqueeze(1)  # (B, 1, 2, S)
-            # ChannelBranchMix: all branches are fused inside with branch_weight
-            mixed = self.ds_convs[channel](channel_in, branch_weight)  # (B, 1, S)
+            mixed = self.ds_convs[channel](channel_in, branch_weight[:, channel, :])  # (B, 1, S)
             conv_outs.append(mixed)
         conv_out = torch.cat(conv_outs, dim=1)  # (B, C, S)
         return conv_out
@@ -176,15 +166,8 @@ class Model(nn.Module):
         )
 
         self.log_Tm = nn.Parameter(torch.tensor(0.0))  # 初始 Tm=1
-
-        self.input_proj = nn.Linear(self.seq_len, self.d_model)
-        self.model = nn.Sequential(
-            nn.Linear(self.d_model, self.d_model),
-            nn.GELU(),
-            nn.Linear(self.d_model, self.d_model),
-            nn.GELU(),
-        )
         self.output_proj = nn.Sequential(
+            nn.Linear(self.seq_len, self.d_model),
             nn.Dropout(self.dropout),
             nn.Linear(self.d_model, self.pred_len),
         )
@@ -223,15 +206,15 @@ class Model(nn.Module):
 
     def _build_branch_weight_from_periods(self, tau_all, tau_weight):
         # Period-kernel matching: score_j = sum_i w_i * exp(-|log(tau_i)-log(k_j)| / T)
-        # tau_all, tau_weight: (B, K)；M = len(period_array)
+        # tau_all, tau_weight: (B, C, K)；M = len(period_array)
         Tm = torch.exp(self.log_Tm)  # 标量
         period_tensor = tau_all.new_tensor(self.period_array)  # (M,)
-        log_tau = torch.log(tau_all).unsqueeze(-1)  # (B, K, 1)
-        log_period = torch.log(period_tensor).view(1, 1, -1)  # (1, 1, M)
-        dist = (log_tau - log_period).abs()  # (B, K, M)
-        match = torch.exp(-dist / Tm)  # (B, K, M)
-        score = (tau_weight.unsqueeze(-1) * match).sum(dim=1)  # (B, M)；tau_weight.unsqueeze(-1): (B, K, 1)
-        return F.softmax(score, dim=-1)  # (B, M)
+        log_tau = torch.log(tau_all).unsqueeze(-1)  # (B, C, K, 1)
+        log_period = torch.log(period_tensor).view(1, 1, 1, -1)  # (1, 1, 1, M)
+        dist = (log_tau - log_period).abs()  # (B, C, K, M)
+        match = torch.exp(-dist / Tm)  # (B, C, K, M)
+        score = (tau_weight.unsqueeze(-1) * match).sum(dim=2)  # (B, C, M)
+        return F.softmax(score, dim=-1)  # (B, C, M)
 
     def forward(self, x):
         # x: (B, S, C)；S=seq_len，C=enc_in
@@ -250,6 +233,7 @@ class Model(nn.Module):
             tau_weight = tau_weight.new_zeros(tau_weight.shape)
             tau_weight[:, :, 0] = 1.0
 
+        # 多尺度相位查询
         query_per_var = self._build_multiscale_query(
             tau_all=tau_all,
             tau_weight=tau_weight,
@@ -264,19 +248,16 @@ class Model(nn.Module):
             query_per_var,
         )  # attn_out: (B, C, S)
         query_input = self.query_channel_norm(query_per_var + attn_out)  # (B, C, S)
-
-        tau_all_shared = tau_all.mean(dim=1)  # (B, K)，跨通道平均
-        tau_weight_shared = tau_weight.mean(dim=1)  # (B, K)
+        
+        ## 自适应多分支时序融合（Adaptive Multi-Branch Temporal Fusion）
         branch_weight = self._build_branch_weight_from_periods(
-            tau_all_shared,
-            tau_weight_shared,
-        )  # (B, M)，M = len(period_array)
+            tau_all,
+            tau_weight,
+        )  # (B, C, M)，M = len(period_array)
         global_information = self.sap_mixer(x_input, query_input, branch_weight=branch_weight)  # (B, C, S)
 
-        # Projection + MLP；d_model = configs.d_model
-        input_proj = self.input_proj(x_input + global_information)  # (B, C, d_model)
-        hidden = self.model(input_proj)  # (B, C, d_model)
-        output = self.output_proj(hidden + input_proj).permute(0, 2, 1)  # 先 (B, C, pred_len) -> (B, pred_len, C)
+        # 预测头（Projection）
+        output = self.output_proj(x_input + global_information).permute(0, 2, 1)  # (B, C, pred_len) -> (B, pred_len, C)
 
         # RevIN de-normalize
         output = output * seq_std + seq_mean
